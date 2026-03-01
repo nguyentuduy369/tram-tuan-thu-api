@@ -14,22 +14,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# LẤY 9 API KEYS TỪ KÉT SẮT RENDER (Khu vực Environment Variables)
+# LẤY 9 API KEYS TỪ KÉT SẮT RENDER
 api_keys_raw = os.getenv("API_KEYS", "")
 API_KEYS = [k.strip() for k in api_keys_raw.split(",") if k.strip()]
 
-# Danh sách model ổn định nhất theo tài liệu Mèo Già cung cấp
+# Danh sách Model an toàn nhất (Dựa trên PDF Giám đốc cung cấp)
 MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
 
 current_key_index = 0
-current_model_index = 0
 
 @app.get("/")
 def read_root():
     return {
         "status": "Online",
         "keys_loaded": len(API_KEYS),
-        "engine": "Trạm Tuân Thủ v2.0"
+        "engine": "Trạm Tuân Thủ v2.5 Debug Mode"
     }
 
 class ScanRequest(BaseModel):
@@ -38,25 +37,24 @@ class ScanRequest(BaseModel):
 
 @app.post("/api/scan")
 async def scan_document(req: ScanRequest):
-    global current_key_index, current_model_index
+    global current_key_index
     
     if not API_KEYS:
-        print("!!! CẢNH BÁO: Không tìm thấy API_KEYS trong cấu hình Render !!!")
-        raise HTTPException(status_code=500, detail="Máy chủ chưa được cấu hình API Keys.")
+        raise HTTPException(status_code=500, detail="Chưa cấu hình API_KEYS trong Environment của Render!")
 
-    # Thử tối đa qua nhiều Key và Model
-    max_attempts = len(API_KEYS) * 2
+    # Thử quét qua tất cả 9 Keys
+    max_attempts = len(API_KEYS)
     
     async with httpx.AsyncClient() as client:
         for attempt in range(max_attempts):
             api_key = API_KEYS[current_key_index]
-            model_name = MODELS[current_model_index]
+            # Thử model 2.0-flash trước vì nó mạnh nhất trong danh sách của Giám đốc
+            model_name = "gemini-2.0-flash" 
             
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
             
             try:
-                # Prompt chuyên gia cho Mèo Già
-                system_prompt = f"Bạn là Trạm Tuân Thủ AI. Công cụ: {req.tool}. Hãy phân tích: "
+                system_prompt = f"Bạn là Trạm Tuân Thủ AI. Hãy phân tích: "
                 payload = {"contents": [{"parts": [{"text": system_prompt + req.query}]}]}
                 
                 response = await client.post(url, json=payload, timeout=30.0)
@@ -65,17 +63,16 @@ async def scan_document(req: ScanRequest):
                     data = response.json()
                     return {"result": data["candidates"][0]["content"]["parts"][0]["text"]}
                 
-                # In lỗi để theo dõi
-                print(f"Lần thử {attempt+1}: Key {current_key_index}, Model {model_name}, Status {response.status_code}")
+                # NẾU THẤT BẠI: In lỗi cực chi tiết ra Log Render
+                print(f"--- THỬ KEY SỐ {current_key_index + 1} THẤT BẠI ---")
+                print(f"Mã lỗi HTTP: {response.status_code}")
+                print(f"Lý do Google từ chối: {response.text}") # <--- ĐÂY LÀ DÒNG CHÚNG TA CẦN ĐỌC
                 
-                # Logic xoay vòng: Nếu 429/403 (Lỗi Key) -> Đổi Key. Nếu lỗi khác -> Đổi Model.
-                if response.status_code in [429, 403]:
-                    current_key_index = (current_key_index + 1) % len(API_KEYS)
-                else:
-                    current_model_index = (current_model_index + 1) % len(MODELS)
-                    
+                # Xoay vòng sang Key tiếp theo
+                current_key_index = (current_key_index + 1) % len(API_KEYS)
+                
             except Exception as e:
-                print(f"Lỗi kết nối: {str(e)}")
+                print(f"Lỗi kết nối mạng: {str(e)}")
                 current_key_index = (current_key_index + 1) % len(API_KEYS)
 
-    raise HTTPException(status_code=429, detail="Tất cả tài nguyên AI tạm thời không phản hồi.")
+    raise HTTPException(status_code=429, detail="Cả 9 Key đều bị Google từ chối. Giám đốc hãy xem Log trên Render để biết lý do tiếng Anh là gì!")
