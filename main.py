@@ -14,9 +14,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# LẤY CHÌA KHÓA TỪ KÉT SẮT RENDER (AN TOÀN TUYỆT ĐỐI)
-api_keys_str = os.getenv("API_KEYS", "")
-API_KEYS = [k.strip() for k in api_keys_str.split(",") if k.strip()]
+# Lấy chuỗi từ Render, nếu không thấy thì để trống
+api_keys_raw = os.getenv("API_KEYS", "")
+
+# Tách chuỗi thành danh sách 9 Key
+API_KEYS = [k.strip() for k in api_keys_raw.split(",") if k.strip()]
 
 MODELS = [
     "gemini-2.0-flash", 
