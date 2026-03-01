@@ -18,8 +18,8 @@ app.add_middleware(
 api_keys_raw = os.getenv("API_KEYS", "")
 API_KEYS = [k.strip() for k in api_keys_raw.split(",") if k.strip()]
 
-# Danh sách Model an toàn nhất (Dựa trên PDF Giám đốc cung cấp)
-MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+# THAY ĐỔI CHIẾN THUẬT: Dùng 1.5-flash làm chủ đạo vì 2.0 đang bị xịt quota
+MODELS = ["gemini-1.5-flash", "gemini-1.5-pro"]
 
 current_key_index = 0
 
@@ -28,7 +28,7 @@ def read_root():
     return {
         "status": "Online",
         "keys_loaded": len(API_KEYS),
-        "engine": "Trạm Tuân Thủ v2.5 Debug Mode"
+        "engine": "Trạm Tuân Thủ v3.0 - 1.5 Flash Engine"
     }
 
 class ScanRequest(BaseModel):
@@ -40,21 +40,20 @@ async def scan_document(req: ScanRequest):
     global current_key_index
     
     if not API_KEYS:
-        raise HTTPException(status_code=500, detail="Chưa cấu hình API_KEYS trong Environment của Render!")
+        raise HTTPException(status_code=500, detail="Chưa cấu hình API_KEYS!")
 
-    # Thử quét qua tất cả 9 Keys
     max_attempts = len(API_KEYS)
     
     async with httpx.AsyncClient() as client:
         for attempt in range(max_attempts):
             api_key = API_KEYS[current_key_index]
-            # Thử model 2.0-flash trước vì nó mạnh nhất trong danh sách của Giám đốc
-            model_name = "gemini-2.0-flash" 
+            # ÉP DÙNG 1.5 FLASH ĐỂ VƯỢT LỖI LIMIT 0
+            model_name = "gemini-1.5-flash" 
             
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
             
             try:
-                system_prompt = f"Bạn là Trạm Tuân Thủ AI. Hãy phân tích: "
+                system_prompt = f"Bạn là Trạm Tuân Thủ AI chuyên gia pháp lý. Hãy phân tích: "
                 payload = {"contents": [{"parts": [{"text": system_prompt + req.query}]}]}
                 
                 response = await client.post(url, json=payload, timeout=30.0)
@@ -63,16 +62,13 @@ async def scan_document(req: ScanRequest):
                     data = response.json()
                     return {"result": data["candidates"][0]["content"]["parts"][0]["text"]}
                 
-                # NẾU THẤT BẠI: In lỗi cực chi tiết ra Log Render
-                print(f"--- THỬ KEY SỐ {current_key_index + 1} THẤT BẠI ---")
-                print(f"Mã lỗi HTTP: {response.status_code}")
-                print(f"Lý do Google từ chối: {response.text}") # <--- ĐÂY LÀ DÒNG CHÚNG TA CẦN ĐỌC
+                # In lỗi chi tiết để Giám đốc theo dõi
+                print(f"Key {current_key_index + 1} thất bại với model {model_name}. Mã: {response.status_code}")
                 
-                # Xoay vòng sang Key tiếp theo
+                # Xoay vòng Key
                 current_key_index = (current_key_index + 1) % len(API_KEYS)
                 
             except Exception as e:
-                print(f"Lỗi kết nối mạng: {str(e)}")
                 current_key_index = (current_key_index + 1) % len(API_KEYS)
 
-    raise HTTPException(status_code=429, detail="Cả 9 Key đều bị Google từ chối. Giám đốc hãy xem Log trên Render để biết lý do tiếng Anh là gì!")
+    raise HTTPException(status_code=429, detail="Google đang giới hạn gắt gao. Giám đốc hãy thử lại sau 1 phút.")
