@@ -35,10 +35,10 @@ API_KEYS = [
 # DANH SÁCH ĐỘNG CƠ DỰ PHÒNG (Dựa theo file model_gemini_free.txt)
 # =================================================================
 MODELS = [
+    "gemini-2.0-flash", 
     "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash-lite"
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash-lite"
 ]
 
 current_key_index = 0
