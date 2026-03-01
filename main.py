@@ -20,9 +20,9 @@ app.add_middleware(
 # Mèo Già dán các API Key của mình vào danh sách dưới đây:
 # =================================================================
 API_KEYS = [
-    "DÁN_API_KEY_SỐ_1_VÀO_ĐÂY",
-    "DÁN_API_KEY_SỐ_2_VÀO_ĐÂY",
-    "DÁN_API_KEY_SỐ_3_VÀO_ĐÂY"
+    "AIzaSyDOOiKriEsblDufKeZ7VdhCrazDPlNn4jI",
+    "AIzaSyBBym7nCqUTMUl3vuzspoNFqC-3Tr2quxg",
+    "AIzaSyD66QktNtrc1ZZXsbXIkDx3Uzi_GnNXm3s"
 ]
 current_key_index = 0
 
