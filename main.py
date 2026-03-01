@@ -9,15 +9,14 @@ app = FastAPI()
 # Mở cửa cho Figma kết nối vào máy chủ này
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Hỗ trợ mọi tên miền (kể cả Figma IDE)
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # =================================================================
-# KHO CHỨA API KEYS (XOAY VÒNG TỰ ĐỘNG)
-# Mèo Già dán các API Key của mình vào danh sách dưới đây:
+# KHO CHỨA API KEYS (Mèo Già dán đè Key thật vào đây)
 # =================================================================
 API_KEYS = [
     "AIzaSyDOOiKriEsblDufKeZ7VdhCrazDPlNn4jI",
@@ -26,19 +25,17 @@ API_KEYS = [
 ]
 current_key_index = 0
 
-# Động cơ mặc định (Như Mèo Già yêu cầu)
-MODEL_NAME = "gemini-2.5-flash"
+# Đổi về 2.0-flash để đảm bảo tương thích 100% với Free Tier
+MODEL_NAME = "gemini-2.0-flash"
 
 class ScanRequest(BaseModel):
     query: str
     tool: str = ""
 
-# Nhịp tim (Endpoint để Cron-job.org gõ cửa mỗi 14 phút)
 @app.get("/")
 def read_root():
     return {"status": "Trạm Tuân Thủ API đang chạy 24/7!"}
 
-# API chính để Figma gọi
 @app.post("/api/scan")
 async def scan_document(req: ScanRequest):
     global current_key_index
@@ -56,7 +53,6 @@ async def scan_document(req: ScanRequest):
     }
 
     async with httpx.AsyncClient() as client:
-        # Vòng lặp: Nếu Key chết, tự nhảy sang Key tiếp theo
         while attempts < max_attempts:
             api_key = API_KEYS[current_key_index]
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={api_key}"
@@ -68,16 +64,19 @@ async def scan_document(req: ScanRequest):
                     data = response.json()
                     return {"result": data["candidates"][0]["content"]["parts"][0]["text"]}
                 
-                elif response.status_code in [429, 403, 400]: # Lỗi hết hạn mức hoặc bị block
-                    print(f"Key số {current_key_index + 1} báo lỗi {response.status_code}. Tự động xoay vòng sang Key tiếp theo...")
+                else: # Đã gộp mọi lỗi (400, 403, 404, 429) vào đây để phân tích
+                    print("="*40)
+                    print(f"LỖI TẠI KEY SỐ: {current_key_index + 1}")
+                    print(f"Mã lỗi HTTP: {response.status_code}")
+                    print(f"Lý do Google từ chối: {response.text}") # <--- DÒNG NỘI SOI NÀY RẤT QUAN TRỌNG
+                    print("="*40)
+                    
                     current_key_index = (current_key_index + 1) % len(API_KEYS)
                     attempts += 1
-                else:
-                    raise HTTPException(status_code=response.status_code, detail="Lỗi không xác định từ Gemini")
+                    
             except Exception as e:
                 print(f"Lỗi mạng: {str(e)}. Thử Key tiếp theo...")
                 current_key_index = (current_key_index + 1) % len(API_KEYS)
                 attempts += 1
 
-        # Nếu quét qua toàn bộ Key mà vẫn xịt
-        raise HTTPException(status_code=429, detail="Tất cả API Keys đều đã hết hạn mức (Quota Exceeded). Vui lòng thêm Key mới.")
+        raise HTTPException(status_code=429, detail="Tất cả API Keys đều thất bại. Vui lòng kiểm tra Log trên Render để xem lý do Google từ chối.")
