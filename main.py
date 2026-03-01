@@ -21,10 +21,10 @@ API_KEYS = [k.strip() for k in api_keys_raw.split(",") if k.strip()]
 # DANH SÁCH ĐỘNG CƠ DỰ PHÒNG (Lấy chính xác từ danh sách của Mèo Già)
 # Chúng ta sẽ thử bản 2.0 trước, nếu 404 sẽ thử bản Flash-latest
 MODELS_TO_TRY = [
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-flash",
-    "gemini-pro-latest"
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash-lite"
 ]
 
 current_key_idx = 0
