@@ -19,71 +19,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# === KÉT SẮT BẢO MẬT ===
 API_KEYS = [k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()]
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 GCP_JSON_KEY = os.getenv("GCP_JSON_KEY", "")
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "679561966812")
-GCP_LOCATION = os.getenv("GCP_LOCATION", "global")
-GCP_AGENT_ID = os.getenv("GCP_AGENT_ID", "") 
-
-current_key_idx = 0
 
 @app.get("/")
-def read_root(): return {"status": "Online", "version": "v7.2-Ultimate-XRay-Parser"}
+def read_root(): return {"status": "Online", "version": "v8.0-Absolute-Agent-Core"}
 
-class ScanRequest(BaseModel):
-    query: str
-    tool: str = ""
-
-@app.post("/api/scan")
-async def scan_document(req: ScanRequest):
-    global current_key_idx
-    if not API_KEYS: raise HTTPException(status_code=500, detail="Chưa cấu hình API_KEYS!")
-    async with httpx.AsyncClient() as client:
-        for _ in range(len(API_KEYS)):
-            api_key = API_KEYS[current_key_idx]
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            try:
-                payload = {"contents": [{"parts": [{"text": f"Công cụ: {req.tool}. Hãy phân tích: {req.query}"}]}]}
-                response = await client.post(url, json=payload, timeout=30.0)
-                if response.status_code == 200: return {"result": response.json()["candidates"][0]["content"]["parts"][0]["text"]}
-                current_key_idx = (current_key_idx + 1) % len(API_KEYS)
-            except Exception: current_key_idx = (current_key_idx + 1) % len(API_KEYS)
-    raise HTTPException(status_code=429, detail="Google từ chối.")
-
+# ==========================================
+# 1. CỖ MÁY MASTER PROMPT SĂN TIN B2B 
+# ==========================================
 MASTER_PROMPT = """[ROLE] Bạn là Tổng biên tập Bản tin Doanh nghiệp B2B. 
 [MISSION] Tạo 4 Hook (25-40 chữ) về chính sách, kinh tế 24h qua. 
 [FORMAT] {"VN": ["✨ Hook 1",...], "EN": [...], "CN": [...]}"""
 
 @app.get("/api/generate-hooks")
 async def generate_hooks():
-    global current_key_idx
     if not API_KEYS: return {"status": "error"}
     async with httpx.AsyncClient() as client:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEYS[current_key_idx]}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEYS[0]}"
         try:
             payload = {"contents": [{"parts": [{"text": MASTER_PROMPT}]}], "tools": [{"googleSearch": {}}]}
             response = await client.post(url, json=payload, timeout=40.0)
             if response.status_code == 200:
                 hook_data = json.loads(response.json()["candidates"][0]["content"]["parts"][0]["text"].replace("```json", "").replace("```", "").strip())
                 with open("dynamic_hooks.json", "w", encoding="utf-8") as f: json.dump(hook_data, f, ensure_ascii=False, indent=2)
-                current_key_idx = (current_key_idx + 1) % len(API_KEYS)
                 return {"status": "success", "data": hook_data}
-            current_key_idx = (current_key_idx + 1) % len(API_KEYS)
             return {"status": "error"}
         except Exception:
-            current_key_idx = (current_key_idx + 1) % len(API_KEYS)
             return {"status": "error"}
 
 @app.get("/api/hooks")
 def get_hooks():
     try:
         with open("dynamic_hooks.json", "r", encoding="utf-8") as f: return json.load(f)
-    except FileNotFoundError: return {"VN": ["✨ Đang tải bản tin pháp lý..."]}
+    except FileNotFoundError: return {"VN": ["✨ Đang tải bản tin pháp lý thời gian thực..."]}
 
 # ==========================================
-# 3. KẾT NỐI LÕI LỄ TÂN (TRANG BỊ TIA X QUÉT LỖI)
+# 2. NÃO BỘ LỄ TÂN ĐƯỢC CẤY TRỰC TIẾP VÀO RENDER
 # ==========================================
 class ChatRequest(BaseModel):
     query: str
@@ -92,53 +67,66 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/workspace-chat")
 async def workspace_chat(req: ChatRequest):
-    if not GCP_JSON_KEY or not GCP_AGENT_ID: return {"result": "Lỗi: Thiếu JSON_KEY hoặc AGENT_ID."}
+    if not GCP_JSON_KEY: return {"result": "Lỗi: Chưa cấu hình GCP_JSON_KEY trên Render."}
+    
     try:
+        # Lấy Token bảo mật từ Google
         key_dict = json.loads(GCP_JSON_KEY)
         creds = service_account.Credentials.from_service_account_info(key_dict)
         scoped_creds = creds.with_scopes(['https://www.googleapis.com/auth/cloud-platform'])
         scoped_creds.refresh(AuthRequest())
         
-        url = f"https://{GCP_LOCATION}-dialogflow.googleapis.com/v3/projects/{GCP_PROJECT_ID}/locations/{GCP_LOCATION}/agents/{GCP_AGENT_ID}/sessions/{req.session_id}:detectIntent"
+        # Gọi thẳng vào siêu trí tuệ Gemini 2.5 Pro trên Vertex AI
+        project_id = "679561966812"
+        location = "us-central1" # API Inference bắt buộc dùng region cụ thể
+        url = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/publishers/google/models/gemini-2.5-pro:generateContent"
+        
         headers = {"Authorization": f"Bearer {scoped_creds.token}", "Content-Type": "application/json"}
-        lang_code = "en" if req.lang == "EN" else "zh-CN" if req.lang == "CN" else "vi"
-        payload = {"queryInput": {"text": {"text": req.query}, "languageCode": lang_code}}
+        
+        # Chỉ thị điều phối y hệt bản thiết kế của Giám đốc
+        system_instruction = f"""
+        VAI TRÒ: Đại diện tuyến đầu - Lễ Tân Điều Phối Trạm Tuân Thủ.
+        NGÔN NGỮ CHỈ ĐỊNH: Bắt buộc trả lời bằng {req.lang}.
+        QUY TRÌNH KÉP:
+        1. Ưu tiên tìm kiếm trong Kho Dữ Liệu Nội Bộ (Data Store).
+        2. Nếu nội bộ không có, BẮT BUỘC sử dụng công cụ Google Search để cập nhật Luật/Dự thảo từ chinhphu.vn, vbpl.vn.
+        3. Kết luận luôn đính kèm Trích dẫn (Nguồn bài viết / Tên Nghị định).
+        """
+
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": req.query}]}],
+            "systemInstruction": {"parts": [{"text": system_instruction}]},
+            "tools": [
+                {"googleSearch": {}}, # Trang bị kỹ năng lướt web
+                {"retrieval": {
+                    "vertexAiSearch": {
+                        # Nối thẳng vào Data Store của Giám đốc
+                        "datastore": "projects/679561966812/locations/global/collections/default_collection/dataStores/knowledge-compliance-hub_1772594714547"
+                    }
+                }}
+            ]
+        }
 
         async with httpx.AsyncClient() as client:
-            # TĂNG THỜI GIAN CHỜ LÊN 90 GIÂY ĐỂ DATA STORE KỊP RÃ ĐÔNG
-            response = await client.post(url, json=payload, headers=headers, timeout=90.0)
+            # Tăng thời gian chờ lên 60s cho việc lục tìm tài liệu
+            response = await client.post(url, json=payload, headers=headers, timeout=60.0)
             
-            # Nếu kết nối thành công nhưng Bot trả về cái gì đó
             if response.status_code == 200:
                 res_data = response.json()
-                messages = res_data.get("queryResult", {}).get("responseMessages", [])
-                
-                # Tình huống 1: Mảng message hoàn toàn trống rỗng (Bot bị đơ ngầm)
-                if not messages:
-                    diagnostic = json.dumps(res_data, ensure_ascii=False)
-                    return {"result": f"⚠️ [BÁO ĐỘNG ĐỎ]: Google trả về trạng thái 200 OK nhưng mảng tin nhắn trống rỗng. Lễ Tân có thể đã bị sập ngầm khi truy xuất Data Store.\n\n[MÃ GỐC TỪ GOOGLE]:\n{diagnostic[:500]}..."}
-                
-                full_reply = ""
-                for msg in messages:
-                    if "text" in msg and "text" in msg["text"]:
-                        full_reply += "\n".join(msg["text"]["text"]) + "\n\n"
-                    elif "payload" in msg:
-                        full_reply += f"📦 [DỮ LIỆU ẨN]: {json.dumps(msg['payload'], ensure_ascii=False)[:200]}...\n\n"
-                
-                # Tình huống 2: Có message nhưng không có chữ (Toàn payload rác)
-                if not full_reply.strip():
-                    raw_str = json.dumps(messages, ensure_ascii=False)
-                    return {"result": f"⚠️ [LỖI TRẮNG]: Bot trả về tin nhắn nhưng nội dung bị hỏng.\n\n[MÃ GỐC]:\n{raw_str[:300]}..."}
-                
-                return {"result": full_reply.strip()}
-            
-            # Tình huống 3: Google báo lỗi thẳng mặt (Ví dụ 500 Internal Error)
+                try:
+                    text_reply = res_data["candidates"][0]["content"]["parts"][0]["text"]
+                    return {"result": text_reply}
+                except KeyError:
+                    return {"result": f"Lễ Tân đang bối rối trước dữ liệu:\n{json.dumps(res_data)[:200]}"}
             else:
-                return {"result": f"🚫 [LỖI MÁY CHỦ GOOGLE]: {response.status_code}\nChi tiết: {response.text[:300]}"}
+                return {"result": f"Lỗi truy xuất Kho Dữ Liệu: {response.status_code} - {response.text[:200]}"}
                 
     except Exception as e:
-        return {"result": f"💥 [LỖI KẾT NỐI API]: Thời gian rã đông quá lâu hoặc đứt cáp.\nChi tiết: {str(e)}"}
+        return {"result": f"Lỗi hệ thống thần kinh Lễ Tân: {str(e)}"}
 
+# ==========================================
+# 3. BÁO CÁO TELEGRAM (ZERO-TRACE)
+# ==========================================
 class TelemetryData(BaseModel):
     titles: list[str]
     raw_info: str
