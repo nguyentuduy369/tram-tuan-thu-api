@@ -4,7 +4,7 @@ import httpx
 import re
 import asyncio
 from datetime import datetime, timezone, timedelta
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google.oauth2 import service_account
@@ -20,17 +20,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === KÉT SẮT BẢO MẬT ===
+# === KÉT SẮT BẢO MẬT TỪ RENDER ===
 API_KEYS = [k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()]
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 GCP_JSON_KEY = os.getenv("GCP_JSON_KEY", "")
 
 @app.get("/")
-def read_root(): return {"status": "Online", "version": "v9.1-Full-SME-Context-Aware"}
+def read_root(): 
+    return {"status": "Online", "version": "v9.2-Ultimate-SME-Core"}
 
 # ==========================================
-# 1. CỖ MÁY MASTER PROMPT SĂN TIN B2B 
+# 1. CỖ MÁY MASTER PROMPT SĂN TIN B2B (TỰ CHỮA LÀNH)
 # ==========================================
 MASTER_PROMPT = """[ROLE] Bạn là Tổng biên tập Bản tin Doanh nghiệp B2B. 
 [MISSION] Tạo 4 Hook (25-40 chữ) về chính sách, kinh tế 24h qua. 
@@ -44,35 +45,45 @@ async def fetch_and_save_hooks_bg():
             payload = {"contents": [{"parts": [{"text": MASTER_PROMPT}]}], "tools": [{"googleSearch": {}}]}
             response = await client.post(url, json=payload, timeout=40.0)
             if response.status_code == 200:
-                hook_data = json.loads(response.json()["candidates"][0]["content"]["parts"][0]["text"].replace("```json", "").replace("```", "").strip())
-                with open("dynamic_hooks.json", "w", encoding="utf-8") as f: json.dump(hook_data, f, ensure_ascii=False, indent=2)
-        except Exception: pass
+                raw_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+                clean_json = raw_text.replace("```json", "").replace("```", "").strip()
+                hook_data = json.loads(clean_json)
+                with open("dynamic_hooks.json", "w", encoding="utf-8") as f: 
+                    json.dump(hook_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Lỗi săn tin ngầm: {e}")
 
 @app.get("/api/generate-hooks")
 async def generate_hooks(background_tasks: BackgroundTasks):
     background_tasks.add_task(fetch_and_save_hooks_bg)
-    return {"status": "success"}
+    return {"status": "success", "message": "Đã phái trinh sát đi săn tin ngầm!"}
 
 @app.get("/api/hooks")
 async def get_hooks(background_tasks: BackgroundTasks):
     try:
-        with open("dynamic_hooks.json", "r", encoding="utf-8") as f: return json.load(f)
+        with open("dynamic_hooks.json", "r", encoding="utf-8") as f: 
+            return json.load(f)
     except FileNotFoundError:
         background_tasks.add_task(fetch_and_save_hooks_bg)
-        return {"VN": ["✨ Trạm Tuân Thủ đang tải tin tức pháp lý thời gian thực..."], "EN": ["✨ Loading real-time legal news..."], "CN": ["✨ 正在加载实时法律新闻..."]}
+        return {
+            "VN": ["✨ Trạm Tuân Thủ đang tải tin tức pháp lý thời gian thực...", "✨ Đang phân tích biến động thị trường hôm nay..."],
+            "EN": ["✨ Loading real-time legal news...", "✨ Analyzing market fluctuations today..."],
+            "CN": ["✨ 正在加载实时法律新闻...", "✨ 正在分析今日市场波动..."]
+        }
 
 # ==========================================
-# 2. NÃO BỘ "CHUYÊN VIÊN AI" (ĐÃ NỐI DÂY CHUYÊN MÔN PHÒNG BAN)
+# 2. NÃO BỘ "CHUYÊN VIÊN AI" (ĐA TÁC NHÂN + PHÒNG BAN)
 # ==========================================
 class ChatRequest(BaseModel):
     query: str
     session_id: str
     lang: str = "VN"
-    department: str = "" # ĐÃ BỔ SUNG: Nhận từ khóa phòng ban từ Frontend
+    department: str = ""
 
 @app.post("/api/workspace-chat")
 async def workspace_chat(req: ChatRequest):
-    if not GCP_JSON_KEY: return {"result": "Lỗi: Chưa cấu hình GCP_JSON_KEY trên Render."}
+    if not GCP_JSON_KEY: 
+        return {"result": "Lỗi: Chưa cấu hình GCP_JSON_KEY trên Render."}
     
     try:
         key_dict = json.loads(GCP_JSON_KEY)
@@ -84,23 +95,30 @@ async def workspace_chat(req: ChatRequest):
         location = "us-central1" 
         url = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/publishers/google/models/gemini-2.5-pro:generateContent"
         
-        headers = {"Authorization": f"Bearer {scoped_creds.token}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {scoped_creds.token}", 
+            "Content-Type": "application/json"
+        }
         
-        # BỘ LỆNH ĐÃ NẠP TỪ KHÓA PHÒNG BAN
         system_instruction = f"""
         VAI TRÒ TỐI CAO: Bạn là "Chuyên Viên AI của Trạm Tuân Thủ" (Smart Compliance Hub AI Specialist) - Cấp bậc Cố vấn B2B.
         
-        PHÒNG BAN CHUYÊN TRÁCH ĐƯỢC CHỈ ĐỊNH: [{req.department if req.department else "Tổng hợp đa ngành"}]
-        -> YÊU CẦU ĐẶC BIỆT: Khách hàng đang chọn nghiệp vụ "{req.department}". Bạn BẮT BUỘC phải dùng lăng kính, thuật ngữ và tư duy rủi ro của chức vụ này (VD: Kế toán, Nhân sự, Pháp chế...) để phân tích vấn đề.
+        PHÒNG BAN CHUYÊN TRÁCH ĐƯỢC CHỈ ĐỊNH: [{req.department if req.department else "Tổng hợp Đa ngành"}]
+        -> YÊU CẦU ĐẶC BIỆT: Khách hàng đang chọn nghiệp vụ "{req.department}". Bạn BẮT BUỘC phải dùng lăng kính, thuật ngữ chuyên ngành và tư duy rủi ro của chức vụ này để phân tích vấn đề.
 
-        CẢM BIẾN NGÔN NGỮ: Tự động nhận diện ngôn ngữ của câu hỏi và trả lời toàn bộ bằng ngôn ngữ đó.
+        CẢM BIẾN NGÔN NGỮ (BẮT BUỘC): 
+        - TỰ ĐỘNG NHẬN DIỆN ngôn ngữ khách hàng đang sử dụng.
+        - Khách hàng hỏi bằng ngôn ngữ nào, toàn bộ Lời chào, Nội dung, và Chữ ký PHẢI được tự động dịch và trả lời bằng đúng ngôn ngữ đó.
 
         CẤU TRÚC PHẢN HỒI CHUẨN MỰC:
-        1. MỞ ĐẦU (Chỉ dùng mở đầu nếu là câu hỏi mới): "Cám ơn quý khách luôn tin tưởng đồng hành cùng Trạm Tuân Thủ." 
-        2. TƯ DUY RAG: Ưu tiên 'vertexAiSearch' để tìm văn bản nội bộ. Nếu thiếu, dùng 'googleSearch' đối chiếu với thực tế thị trường hiện nay. Bỏ qua luật cũ. Dùng Bullet points.
-        3. KẾT THÚC BẮT BUỘC: 
-           - Nguồn tham khảo: [Tên chi tiết Nghị định / Link / Tài liệu...]
-           - — Chuyên Viên AI của Trạm Tuân Thủ.
+        1. MỞ ĐẦU (Chỉ dùng khi bắt đầu chủ đề mới): "Cám ơn quý khách luôn tin tưởng đồng hành cùng Trạm Tuân Thủ." (Dịch chuẩn theo ngôn ngữ nhận diện).
+        2. QUY TRÌNH TƯ DUY:
+           - Ưu tiên 'vertexAiSearch' để tìm văn bản nội bộ.
+           - Nếu thiếu, dùng 'googleSearch' đối chiếu với thực tế thị trường. Cảnh báo sớm dự thảo luật.
+           - Trình bày chuyên nghiệp, dùng Bullet points rõ ràng.
+        3. KẾT THÚC BẮT BUỘC (Luôn nằm ở cuối cùng): 
+           - Nguồn tham khảo: [Tên chi tiết Nghị định / Thông tư / Link Website...]
+           - — Chuyên Viên AI của Trạm Tuân Thủ (Dịch chuẩn theo ngôn ngữ nhận diện).
         """
 
         payload = {
@@ -124,15 +142,15 @@ async def workspace_chat(req: ChatRequest):
                     text_reply = res_data["candidates"][0]["content"]["parts"][0]["text"]
                     return {"result": text_reply}
                 except KeyError:
-                    return {"result": f"Chuyên Viên AI đang xử lý khối lượng dữ liệu lớn. Xin thử lại!\nLog: {json.dumps(res_data)[:100]}"}
+                    return {"result": f"Chuyên Viên AI đang bối rối trước dữ liệu:\n{json.dumps(res_data)[:150]}"}
             else:
-                return {"result": f"Lỗi truy xuất Kho Dữ Liệu: {response.status_code}"}
+                return {"result": f"Lỗi truy xuất Kho Dữ Liệu: {response.status_code} - {response.text[:150]}"}
                 
     except Exception as e:
         return {"result": f"Lỗi kết nối máy chủ Chuyên Viên AI: {str(e)}"}
 
 # ==========================================
-# 3. LƯỚI TÌNH BÁO TELEGRAM (CHIA 3 TIN NHẮN, NGỤY TRANG MXH)
+# 3. LƯỚI TÌNH BÁO TELEGRAM (CHIA 3 TIN NHẮN, NGỤY TRANG)
 # ==========================================
 class TelemetryData(BaseModel):
     titles: list[str]
@@ -146,6 +164,7 @@ async def silent_telemetry(data: TelemetryData):
         guest_id = f"GUEST_{str(datetime.now().timestamp())[-4:]}"
         text = data.raw_info
         
+        # BỘ LỌC TIA X VÀ NGỤY TRANG TỪ KHÓA
         mst = re.search(r'\b\d{10}(?:-\d{3})?\b', text)
         zalo_phone = re.search(r'\b(0[3|5|7|8|9])+([0-9]{8})\b', text)
         facebook = re.search(r'(?:https?:\/\/)?(?:www\.)?facebook\.com\/[a-zA-Z0-9\.]+', text)
@@ -161,7 +180,7 @@ async def silent_telemetry(data: TelemetryData):
         async with httpx.AsyncClient() as client:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             
-            # TIN NHẮN 1
+            # TIN NHẮN 1: Ghi chú Hệ thống
             msg1 = (f"🟢 <b>[GHI CHÚ TRUY CẬP HỆ THỐNG]</b>\n"
                     f"⏱ {vn_time}\n"
                     f"👤 Định danh: {guest_id}\n"
@@ -169,7 +188,7 @@ async def silent_telemetry(data: TelemetryData):
             await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg1, "parse_mode": "HTML"})
             await asyncio.sleep(0.5)
 
-            # TIN NHẮN 2
+            # TIN NHẮN 2: Tuyến liên kết ngoài
             if zalo_str != "Không" or fb_str != "Không" or tt_str != "Không" or tele_str != "Không":
                 msg2 = (f"📡 <b>[TUYẾN LIÊN KẾT NGOÀI]</b>\n"
                         f"📱 Mã Check-in (Z/P): {zalo_str}\n"
@@ -179,11 +198,14 @@ async def silent_telemetry(data: TelemetryData):
                 await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg2, "parse_mode": "HTML"})
                 await asyncio.sleep(0.5)
 
-            # TIN NHẮN 3
+            # TIN NHẮN 3: Chỉ mục quan tâm
             safe_titles = [f"🔹 {re.sub(r'\\b\\d{11,16}\\b', '[ẨN_DẤU]', t[:45])}" for t in data.titles if t]
             if safe_titles:
-                msg3 = (f"📌 <b>[CHỈ MỤC QUAN TÂM]</b>\n{chr(10).join(safe_titles)}")
+                msg3 = (f"📌 <b>[CHỈ MỤC QUAN TÂM]</b>\n"
+                        f"{chr(10).join(safe_titles)}")
                 await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg3, "parse_mode": "HTML"})
 
-    except Exception as e: pass
+    except Exception as e: 
+        print(f"Telemetry Error: {e}")
+        pass
     return {"status": "ok"}
