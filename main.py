@@ -111,7 +111,7 @@ async def generate_hooks():
     async with httpx.AsyncClient() as client:
         # Lấy Key hiện tại (Hưởng lợi từ vòng xoay của hệ thống chính)
         api_key = API_KEYS[current_key_idx]
-        model_name = "gemini-1.5-flash" # Dùng bản Flash cho nhanh và rẻ
+        model_name = "gemini-2.5-flash" # Dùng bản Flash cho nhanh và rẻ
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         
         try:
