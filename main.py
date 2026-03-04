@@ -30,7 +30,7 @@ GCP_AGENT_ID = os.getenv("GCP_AGENT_ID", "")
 current_key_idx = 0
 
 @app.get("/")
-def read_root(): return {"status": "Online", "version": "v7.1-Agent-Parser-Fixed"}
+def read_root(): return {"status": "Online", "version": "v7.2-Ultimate-XRay-Parser"}
 
 class ScanRequest(BaseModel):
     query: str
@@ -83,7 +83,7 @@ def get_hooks():
     except FileNotFoundError: return {"VN": ["✨ Đang tải bản tin pháp lý..."]}
 
 # ==========================================
-# 3. KẾT NỐI LÕI LỄ TÂN (ĐÃ NÂNG CẤP RADAR ĐỌC DATA)
+# 3. KẾT NỐI LÕI LỄ TÂN (TRANG BỊ TIA X QUÉT LỖI)
 # ==========================================
 class ChatRequest(BaseModel):
     query: str
@@ -105,30 +105,39 @@ async def workspace_chat(req: ChatRequest):
         payload = {"queryInput": {"text": {"text": req.query}, "languageCode": lang_code}}
 
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, headers=headers, timeout=60.0)
+            # TĂNG THỜI GIAN CHỜ LÊN 90 GIÂY ĐỂ DATA STORE KỊP RÃ ĐÔNG
+            response = await client.post(url, json=payload, headers=headers, timeout=90.0)
+            
+            # Nếu kết nối thành công nhưng Bot trả về cái gì đó
             if response.status_code == 200:
                 res_data = response.json()
                 messages = res_data.get("queryResult", {}).get("responseMessages", [])
                 
+                # Tình huống 1: Mảng message hoàn toàn trống rỗng (Bot bị đơ ngầm)
+                if not messages:
+                    diagnostic = json.dumps(res_data, ensure_ascii=False)
+                    return {"result": f"⚠️ [BÁO ĐỘNG ĐỎ]: Google trả về trạng thái 200 OK nhưng mảng tin nhắn trống rỗng. Lễ Tân có thể đã bị sập ngầm khi truy xuất Data Store.\n\n[MÃ GỐC TỪ GOOGLE]:\n{diagnostic[:500]}..."}
+                
                 full_reply = ""
                 for msg in messages:
-                    # Nếu là text bình thường
                     if "text" in msg and "text" in msg["text"]:
                         full_reply += "\n".join(msg["text"]["text"]) + "\n\n"
-                    # Nếu là Payload đặc biệt từ Agent Builder
                     elif "payload" in msg:
-                        full_reply += f"[Dữ liệu Payload nội bộ: {json.dumps(msg['payload'], ensure_ascii=False)[:150]}...]\n\n"
+                        full_reply += f"📦 [DỮ LIỆU ẨN]: {json.dumps(msg['payload'], ensure_ascii=False)[:200]}...\n\n"
                 
-                # Báo động đỏ: Nếu trắng bóc, in raw response ra để debug
+                # Tình huống 2: Có message nhưng không có chữ (Toàn payload rác)
                 if not full_reply.strip():
-                    raw_str = json.dumps(res_data, ensure_ascii=False)
-                    return {"result": f"⚠️ [HỆ THỐNG]: Lễ Tân trả về dữ liệu phức tạp chưa đọc được:\n{raw_str[:300]}..."}
+                    raw_str = json.dumps(messages, ensure_ascii=False)
+                    return {"result": f"⚠️ [LỖI TRẮNG]: Bot trả về tin nhắn nhưng nội dung bị hỏng.\n\n[MÃ GỐC]:\n{raw_str[:300]}..."}
                 
                 return {"result": full_reply.strip()}
+            
+            # Tình huống 3: Google báo lỗi thẳng mặt (Ví dụ 500 Internal Error)
             else:
-                return {"result": f"Lỗi Agent: {response.status_code} - {response.text}"}
+                return {"result": f"🚫 [LỖI MÁY CHỦ GOOGLE]: {response.status_code}\nChi tiết: {response.text[:300]}"}
+                
     except Exception as e:
-        return {"result": f"Lỗi Server: {str(e)}"}
+        return {"result": f"💥 [LỖI KẾT NỐI API]: Thời gian rã đông quá lâu hoặc đứt cáp.\nChi tiết: {str(e)}"}
 
 class TelemetryData(BaseModel):
     titles: list[str]
