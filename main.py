@@ -26,7 +26,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 GCP_JSON_KEY = os.getenv("GCP_JSON_KEY", "")
 
 @app.get("/")
-def read_root(): return {"status": "Online", "version": "v8.2-Multi-Agent-Architect"}
+def read_root(): return {"status": "Online", "version": "v8.3-AI-Specialist-Polyglot"}
 
 # ==========================================
 # 1. CỖ MÁY MASTER PROMPT SĂN TIN B2B 
@@ -61,12 +61,12 @@ async def get_hooks(background_tasks: BackgroundTasks):
         return {"VN": ["✨ Trạm Tuân Thủ đang tải tin tức pháp lý thời gian thực..."], "EN": ["✨ Loading real-time legal news..."], "CN": ["✨ 正在加载实时法律新闻..."]}
 
 # ==========================================
-# 2. NÃO BỘ LỄ TÂN (HỢP NHẤT 3 CHUYÊN GIA)
+# 2. NÃO BỘ "CHUYÊN VIÊN AI" (TỰ ĐỘNG ĐA NGỮ)
 # ==========================================
 class ChatRequest(BaseModel):
     query: str
     session_id: str
-    lang: str = "VN"
+    lang: str = "VN" # Biến này giữ lại để dự phòng, nhưng AI sẽ tự nhận diện qua câu hỏi
 
 @app.post("/api/workspace-chat")
 async def workspace_chat(req: ChatRequest):
@@ -84,39 +84,37 @@ async def workspace_chat(req: ChatRequest):
         
         headers = {"Authorization": f"Bearer {scoped_creds.token}", "Content-Type": "application/json"}
         
-        # BỘ LUẬT TỐI CAO CỦA GIÁM ĐỐC TRUYỀN VÀO AI
-        system_instruction = f"""
-        VAI TRÒ TỐI CAO: Bạn là hệ thống trí tuệ nhân tạo chuyên sâu "Trạm Tuân Thủ" (Smart Compliance Hub).
-        NGÔN NGỮ BẮT BUỘC: Phải trả lời hoàn toàn bằng ngôn ngữ {req.lang} (Nếu người dùng dùng tiếng Anh, trả lời tiếng Anh; tiếng Trung trả lời tiếng Trung).
+        # BỘ LUẬT TỐI CAO ĐƯỢC CẬP NHẬT THEO CHỈ THỊ CỦA GIÁM ĐỐC
+        system_instruction = """
+        VAI TRÒ TỐI CAO: Bạn là "Chuyên Viên AI của Trạm Tuân Thủ" (Smart Compliance Hub AI Specialist) - Cấp bậc Cố vấn B2B.
         
-        LỜI CHÀO MỞ ĐẦU BẮT BUỘC: "Thư ký Trạm Tuân Thủ xin kính chào quý khách. Dưới đây là báo cáo phân tích:" (Hãy dịch lời chào này sang ngôn ngữ {req.lang}).
+        CẢM BIẾN NGÔN NGỮ (BẮT BUỘC): 
+        - Hãy TỰ ĐỘNG NHẬN DIỆN ngôn ngữ mà khách hàng đang sử dụng trong câu hỏi (Ưu tiên: Tiếng Việt, Tiếng Anh, Tiếng Trung).
+        - Khách hàng hỏi bằng ngôn ngữ nào, toàn bộ câu trả lời, lời chào, và chữ ký PHẢI được tự động dịch và trả lời bằng đúng ngôn ngữ đó.
+
+        CẤU TRÚC PHẢN HỒI CHUẨN MỰC:
         
-        QUY TRÌNH TƯ DUY ĐA TÁC NHÂN (Hoạt động như 3 chuyên gia):
+        1. MỞ ĐẦU (Chỉ dùng khi bắt đầu chủ đề mới, KHÔNG lặp lại nếu đây là câu hỏi phụ nối tiếp):
+        "Cám ơn quý khách luôn tin tưởng đồng hành cùng Trạm Tuân Thủ." (Dịch chuẩn theo ngôn ngữ đã nhận diện).
         
-        1. CHUYÊN GIA NỘI BỘ (Ưu tiên số 1): 
-        - BẮT BUỘC dùng công cụ 'vertexAiSearch' để lục lọi trong Data Store nội bộ trước. Đây là nguồn chân lý chứa văn bản hiện hành (Thông tư, Nghị định, Dự thảo của Chính phủ).
+        2. QUY TRÌNH TƯ DUY ĐA TÁC NHÂN:
+        - NỘI BỘ: Luôn dùng 'vertexAiSearch' quét Data Store lấy văn bản hiện hành.
+        - INTERNET: Dùng 'googleSearch' đối chiếu với pháp luật thực tế. Bỏ qua luật cũ. Cảnh báo sớm các dự thảo luật mới.
+        - URL: Phân tích sâu nếu khách cung cấp Link.
+        - TONE GIỌNG: Chuyên nghiệp, sắc bén, phân tích rủi ro chiến lược (dành cho Giám đốc, Kế toán trưởng). Dùng Bullet points cho rõ ràng.
         
-        2. CHUYÊN GIA INTERNET (Kích hoạt khi nội bộ thiếu dữ liệu):
-        - Tự động dùng 'googleSearch' để tìm kiếm. Đóng vai Pháp chế/Luật sư doanh nghiệp/Kiểm toán viên.
-        - NGHIÊM CẤM viện dẫn văn bản hết hiệu lực. PHẢI cảnh báo sớm các dự thảo/thông tư sắp áp dụng.
-        - BẮT BUỘC cung cấp link gốc (chinhphu.vn, vbpl.vn, mof.gov.vn...) hoặc link PDF khi trích dẫn Luật.
-        - Đọc vị khách hàng: Luôn đưa ra câu trả lời mang tầm nhìn chiến lược, tư vấn rủi ro chuyên sâu vì khách hàng của bạn là Giám đốc, Kế toán trưởng, Thanh tra.
-        
-        3. CHUYÊN GIA URL:
-        - Nếu khách hàng cung cấp đường link (URL) trong câu hỏi, hãy lập tức đọc hiểu nội dung URL đó, đối chiếu với luật lệ hiện hành và báo cáo chuyên nghiệp.
-        
-        QUY TẮC TRÌNH BÀY:
-        - Văn phong B2B cực kỳ chuyên nghiệp, sắc bén, phân chia rõ các ý (dùng Bullet points).
-        - KẾT LUẬN BẮT BUỘC Ở CUỐI: Luôn kết thúc bằng câu "Nguồn: [Tên các tài liệu / Link trích dẫn] — Tổng hợp bởi Trạm Tuân Thủ (Smart Compliance Hub)." (Dịch sang ngôn ngữ {req.lang}).
+        3. KẾT THÚC BẮT BUỘC (Phải nằm ở cuối cùng và đúng thứ tự này):
+        - Dòng 1: "Nguồn tham khảo: [Liệt kê tên chi tiết Nghị định / Quyết định / Thông tư / Link Website gốc...]"
+        - Dòng 2: "— Chuyên Viên AI của Trạm Tuân Thủ" (Dịch chuẩn theo ngôn ngữ đã nhận diện).
         """
 
         payload = {
             "contents": [{"role": "user", "parts": [{"text": req.query}]}],
             "systemInstruction": {"parts": [{"text": system_instruction}]},
             "tools": [
-                {"googleSearch": {}}, # Vũ khí cho Chuyên gia Internet
+                {"googleSearch": {}}, 
                 {"retrieval": {
-                    "vertexAiSearch": { # Vũ khí cho Chuyên gia Nội bộ
+                    "vertexAiSearch": {
                         "datastore": "projects/679561966812/locations/global/collections/default_collection/dataStores/knowledge-compliance-hub_1772594714547"
                     }
                 }}
@@ -131,12 +129,12 @@ async def workspace_chat(req: ChatRequest):
                     text_reply = res_data["candidates"][0]["content"]["parts"][0]["text"]
                     return {"result": text_reply}
                 except KeyError:
-                    return {"result": f"Lễ Tân đang bối rối trước dữ liệu:\n{json.dumps(res_data)[:200]}"}
+                    return {"result": f"Chuyên Viên AI đang xử lý khối lượng dữ liệu lớn. Xin thử lại!\nLog: {json.dumps(res_data)[:100]}"}
             else:
-                return {"result": f"Lỗi truy xuất Kho Dữ Liệu: {response.status_code} - {response.text[:200]}"}
+                return {"result": f"Lỗi truy xuất Kho Dữ Liệu: {response.status_code}"}
                 
     except Exception as e:
-        return {"result": f"Lỗi hệ thống thần kinh Lễ Tân: {str(e)}"}
+        return {"result": f"Lỗi kết nối máy chủ Chuyên Viên AI: {str(e)}"}
 
 # ==========================================
 # 3. BÁO CÁO TELEGRAM (ZERO-TRACE)
