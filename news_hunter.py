@@ -6,15 +6,17 @@ from fastapi import APIRouter, BackgroundTasks
 router = APIRouter()
 API_KEYS = [k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()]
 
-MASTER_PROMPT = """[ROLE] Bạn là Tổng biên tập Bản tin Doanh nghiệp B2B. 
-[MISSION] Tạo 4 Hook (25-40 chữ) về chính sách, kinh tế. 
-[FORMAT] {"VN": ["✨ Hook 1",...], "EN": [...], "CN": [...]}"""
+MASTER_PROMPT = """[ROLE] Bạn là Copywriter B2B đỉnh cao.
+[MISSION] Tạo 4 câu Hook thu hút về kinh tế luật pháp doanh nghiệp thuế hoặc quản trị SME.
+[RULES] 
+BẮT BUỘC mỗi Hook phải có độ dài TỐI THIỂU 25 CHỮ và TỐI ĐA 40 CHỮ.
+Phải là một câu hoàn chỉnh cung cấp thông tin hữu ích nhưng giấu lại điểm mấu chốt để gây tò mò.
+[FORMAT] {"VN": ["Hook 1...", "Hook 2..."], "EN": ["..."], "CN": ["..."]}"""
 
-# ĐÃ SỬA: Lưu Hook vào RAM. Mở web là có ngay, không phụ thuộc file JSON!
 memory_hooks = {
-    "VN": ["✨ Thuế siết chặt kiểm tra hóa đơn điện tử 2026...", "✨ Lãi suất vay B2B giảm, cơ hội mở rộng vốn...", "✨ Quy định BHXH mới ảnh hưởng trực tiếp quỹ lương...", "✨ 5 rủi ro pháp lý SME thường gặp khi ký hợp đồng..."],
-    "EN": ["✨ Tax authorities tighten e-invoice inspections...", "✨ B2B loan interest rates show signs of cooling...", "✨ New social insurance rules affect payroll...", "✨ Top 5 legal risks for SMEs..."],
-    "CN": ["✨ 税务机关加强电子发票检查...", "✨ B2B贷款利率出现降温迹象...", "✨ 新的社保规定影响工资基金...", "✨ 中小企业面临的五大法律风险..."]
+    "VN": ["Thuế siết chặt kiểm tra hóa đơn điện tử 2026 rủi ro tiềm ẩn cho doanh nghiệp", "Lãi suất vay B2B giảm cơ hội mở rộng vốn kinh doanh hiệu quả", "Quy định BHXH mới ảnh hưởng trực tiếp quỹ lương cần lưu ý ngay", "5 rủi ro pháp lý SME thường gặp khi ký hợp đồng thương mại"],
+    "EN": ["Tax authorities tighten e-invoice inspections hidden risks for enterprises", "B2B loan interest rates show signs of cooling expansion opportunity", "New social insurance rules affect payroll funds take note immediately", "Top 5 legal risks for SMEs when signing commercial contracts"],
+    "CN": ["税务机关加强电子发票检查企业隐藏风险", "B2B贷款利率出现降温迹象扩张机会", "新的社保规定直接影响工资基金请立即注意", "中小企业签订商业合同时面临的五大法律风险"]
 }
 
 async def fetch_and_save_hooks_bg():
