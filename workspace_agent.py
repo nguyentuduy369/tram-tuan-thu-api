@@ -1,8 +1,4 @@
-import os
-import json
-import httpx
-import re
-import asyncio
+import os, json, httpx, re, asyncio
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -14,150 +10,93 @@ GCP_JSON_KEY = os.getenv("GCP_JSON_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# ==========================================
-# 1. NÃO BỘ CHUYÊN VIÊN AI (XỬ LÝ CHAT)
-# ==========================================
 class ChatRequest(BaseModel):
-    query: str
-    session_id: str
-    lang: str = "VN"
-    department: str = ""
+    query: str; session_id: str; lang: str = "VN"; department: str = ""
 
 @router.post("/api/workspace-chat")
 async def workspace_chat(req: ChatRequest):
-    if not GCP_JSON_KEY: return {"result": "Lỗi API: Chưa cấu hình hệ thống."}
+    if not GCP_JSON_KEY: return {"result": "Lỗi API"}
     try:
         key_dict = json.loads(GCP_JSON_KEY)
         creds = service_account.Credentials.from_service_account_info(key_dict).with_scopes(['https://www.googleapis.com/auth/cloud-platform'])
         creds.refresh(AuthRequest())
         url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/679561966812/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
         
-        system_instruction = f"""
-        VAI TRÒ: "Chuyên Viên AI của Trạm Tuân Thủ" - Cố vấn B2B. PHÒNG BAN: [{req.department}]
-        
-        [LỆNH THÉP VỀ NGÔN NGỮ]: BẮT BUỘC nhận diện ngôn ngữ của khách.
-        - NẾU KHÁCH GÕ TIẾNG ANH -> PHẢI TRẢ LỜI 100 PHẦN TRĂM BẰNG TIẾNG ANH.
-        - NẾU KHÁCH GÕ TIẾNG TRUNG -> TRẢ LỜI 100 PHẦN TRĂM BẰNG TIẾNG TRUNG.
-        
-        KẾT THÚC BẮT BUỘC: Nguồn tham khảo: [...] — Chuyên Viên AI của Trạm Tuân Thủ.
-        """
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": req.query}]}], 
-            "systemInstruction": {"parts": [{"text": system_instruction}]}, 
-            "tools": [{"googleSearch": {}}, {"retrieval": {"vertexAiSearch": {"datastore": "projects/679561966812/locations/global/collections/default_collection/dataStores/knowledge-compliance-hub_1772594714547"}}}]
-        }
+        system_instruction = f"VAI TRÒ: 'Chuyên Viên AI của Trạm Tuân Thủ' Cố vấn B2B. PHÒNG BAN: [{req.department}]\nLỆNH THÉP VỀ NGÔN NGỮ: BẮT BUỘC nhận diện ngôn ngữ của khách để trả lời tương ứng (Anh/Trung/Việt).\nKẾT THÚC BẮT BUỘC: Nguồn tham khảo: [...] Chuyên Viên AI của Trạm Tuân Thủ."
+        payload = {"contents": [{"role": "user", "parts": [{"text": req.query}]}], "systemInstruction": {"parts": [{"text": system_instruction}]}, "tools": [{"googleSearch": {}}, {"retrieval": {"vertexAiSearch": {"datastore": "projects/679561966812/locations/global/collections/default_collection/dataStores/knowledge-compliance-hub_1772594714547"}}}]}
         
         async with httpx.AsyncClient() as client:
             res = await client.post(url, json=payload, headers={"Authorization": f"Bearer {creds.token}"}, timeout=60.0)
             return {"result": res.json()["candidates"][0]["content"]["parts"][0]["text"]}
-    except Exception as e: 
-        return {"result": f"Lỗi hệ thống AI: {str(e)}"}
+    except Exception as e: return {"result": str(e)}
 
-# ==========================================
-# 2. CHỐT CHẶN TÌNH BÁO (ẨN DANH & BẢO MẬT)
-# ==========================================
 class SyncSessionState(BaseModel):
-    titles: list[str]
-    raw_info: str
-    session_id: str
+    titles: list[str]; raw_info: str; session_id: str
 
-# Bộ nhớ đệm RAM để kiểm tra chống Spam gửi trùng lặp
 processed_sessions = set()
 
 @router.post("/api/sync-workspace")
 async def silent_telemetry(request: Request, data: SyncSessionState):
-    if not TELEGRAM_BOT_TOKEN: 
-        return {"status": "ok"}
+    if not TELEGRAM_BOT_TOKEN or not GCP_JSON_KEY: return {"status": "ok"}
     
-    # 1. Cơ chế Thông minh (Chống gửi lặp)
     cache_key = f"{data.session_id}_{hash(data.raw_info)}"
-    if cache_key in processed_sessions: 
-        return {"status": "ok"}
-    
+    if cache_key in processed_sessions: return {"status": "ok"}
     processed_sessions.add(cache_key)
-    if len(processed_sessions) > 1000: 
-        processed_sessions.clear()
+    if len(processed_sessions) > 1000: processed_sessions.clear()
 
     try:
         vn_time = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S | %d/%m/%Y")
         guest_id = f"GUEST_{data.session_id[-6:] if data.session_id else str(datetime.now().timestamp())[-4:]}"
         
-        # 2. Định vị Khách hàng qua IP
-        client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "Unknown")
-        client_ip = client_ip.split(",")[0].strip()
+        client_ip = request.headers.get("X-Forwarded-For", "Unknown").split(",")[0].strip()
         location_str = "Chưa xác định"
-        if client_ip and client_ip not in ["Unknown", "127.0.0.1", "localhost"]:
+        if client_ip not in ["Unknown", "127.0.0.1", "localhost"]:
             try:
                 async with httpx.AsyncClient() as c:
                     geo_res = await c.get(f"http://ip-api.com/json/{client_ip}", timeout=3.0)
-                    if geo_res.status_code == 200:
-                        geo_data = geo_res.json()
-                        if geo_data.get("status") == "success":
-                            location_str = f"{geo_data.get('city', '')}, {geo_data.get('regionName', '')}"
+                    if geo_res.status_code == 200 and geo_res.json().get("status") == "success":
+                        location_str = f"{geo_res.json().get('city', '')}, {geo_res.json().get('regionName', '')}"
             except Exception: pass
 
         text = data.raw_info
-        
-        # 3. Phân tích & Gắn Nhãn (Regex không dùng backslash trong f-string)
         mst_matches = re.findall(r'\b\d{10}(?:-\d{3})?\b', text)
         mst_str = ", ".join(set(mst_matches)) if mst_matches else "Không"
         
         phone_matches = re.findall(r'(?:0|\+84)(?:[\s\.\-]*[0-9xX\.\*]){8,10}\b', text)
         ghi_chu_bo_sung = ", ".join(set(phone_matches)) if phone_matches else "Không"
         
-        social_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:facebook\.com|fb\.com|youtube\.com|youtu\.be|instagram\.com|zalo\.me|t\.me|tiktok\.com)\/[a-zA-Z0-9\.\_\-]+'
-        social_matches = re.findall(social_pattern, text)
+        social_matches = re.findall(r'(?:https?:\/\/)?(?:www\.)?(?:facebook\.com|fb\.com|youtube\.com|youtu\.be|instagram\.com|zalo\.me|t\.me|tiktok\.com)\/[a-zA-Z0-9\.\_\-]+', text)
         da_ghe_tham = ", ".join(set(social_matches)) if social_matches else "Không"
 
-        # 4. CHỐT CHẶN PHÁP LÝ (Che Thẻ ATM / Ngân hàng)
         safe_text = text
-        potential_banks = re.findall(r'\b\d{11,19}\b', safe_text)
-        for b in potential_banks:
-            if b not in mst_matches:
-                safe_text = safe_text.replace(b, "{Đã HỦY}")
+        for b in re.findall(r'\b\d{11,19}\b', safe_text):
+            if b not in mst_matches: safe_text = safe_text.replace(b, "{Đã HỦY}")
 
-        # Xử lý an toàn cho Titles
-        clean_titles = []
-        for t in data.titles:
-            if t:
-                ct = t
-                for b in re.findall(r'\b\d{11,19}\b', ct):
-                    if b not in mst_matches:
-                        ct = ct.replace(b, "{Đã HỦY}")
-                clean_titles.append(f"🔹 {ct}")
+        # ĐÃ BỔ SUNG: GỌI AI ĐỂ TÓM TẮT BÁO CÁO (Chỉ tóm tắt phần an toàn)
+        ai_summary = "Không có nội dung chi tiết."
+        try:
+            key_dict = json.loads(GCP_JSON_KEY)
+            creds = service_account.Credentials.from_service_account_info(key_dict).with_scopes(['https://www.googleapis.com/auth/cloud-platform'])
+            creds.refresh(AuthRequest())
+            url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/679561966812/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
+            prompt = f"Hãy đóng vai trò là Chuyên gia Phân tích Dữ liệu. Đọc đoạn lịch sử chat sau và TÓM TẮT NGẮN GỌN (3-4 gạch đầu dòng) về: Nhu cầu cốt lõi của khách là gì? Rủi ro pháp lý nằm ở đâu? AI đã tư vấn hướng giải quyết nào? TUYỆT ĐỐI NGẮN GỌN, CHUYÊN NGHIỆP.\n\nĐoạn chat:\n{safe_text[:3000]}"
+            payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+            async with httpx.AsyncClient() as client:
+                sum_res = await client.post(url, json=payload, headers={"Authorization": f"Bearer {creds.token}"}, timeout=20.0)
+                ai_summary = sum_res.json()["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e: ai_summary = f"Lỗi tạo tóm tắt: {e}"
 
-        # 5. Phân rã và Gửi Báo Cáo
         async with httpx.AsyncClient() as client:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             
-            # [TIN NHẮN 1] THU THẬP TĨNH
-            msg1 = (
-                f"🟢 <b>[PHIÊN TRUY CẬP HỆ THỐNG]</b>\n"
-                f"⏱ {vn_time}\n"
-                f"👤 Tên/ID: {guest_id}\n"
-                f"📍 Vị trí IP: {location_str} ({client_ip})\n"
-                f"🏢 Mã số DN: {mst_str}\n"
-                f"📝 Ghi Chú Bổ Sung: {ghi_chu_bo_sung}\n"
-                f"🔗 Đã Ghé Thăm: {da_ghe_tham}"
-            )
+            # TIN 1: THÔNG TIN TĨNH
+            msg1 = f"🟢 <b>[PHIÊN TRUY CẬP HỆ THỐNG]</b>\n⏱ {vn_time}\n👤 ID: {guest_id}\n📍 Vị trí IP: {location_str}\n🏢 Mã số DN: {mst_str}\n📝 Ghi Chú Bổ Sung (SĐT): {ghi_chu_bo_sung}\n🔗 Đã Ghé Thăm (MXH): {da_ghe_tham}"
             await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg1, "parse_mode": "HTML"})
             await asyncio.sleep(0.5)
 
-            # [TIN NHẮN 2+] NỘI DUNG TRAO ĐỔI (Chia nhỏ nếu quá 3500 ký tự)
-            chunk_size = 3500
-            chunks = [safe_text[i:i+chunk_size] for i in range(0, len(safe_text), chunk_size)]
-            
-            for idx, chunk in enumerate(chunks):
-                header = ""
-                if idx == 0 and clean_titles:
-                    header = f"📌 <b>[CHỦ ĐỀ QUAN TÂM]</b>\n" + "\n".join(clean_titles) + "\n\n"
-                
-                msg_chat = f"{header}💬 <b>[NỘI DUNG HỘI THOẠI] (Phần {idx+1}/{len(chunks)}):</b>\n{chunk}"
-                await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg_chat, "parse_mode": "HTML"})
-                await asyncio.sleep(0.5)
+            # TIN 2: BÁO CÁO TÓM TẮT TỪ AI (Tuyệt đẹp, ngắn gọn)
+            msg_chat = f"💬 <b>[BÁO CÁO TÓM TẮT PHIÊN LÀM VIỆC]</b>\n{ai_summary}"
+            await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg_chat, "parse_mode": "HTML"})
 
-    except Exception as e: 
-        print(f"Lỗi hệ thống đồng bộ: {e}")
-        pass
-    
+    except Exception as e: print(e)
     return {"status": "ok"}
