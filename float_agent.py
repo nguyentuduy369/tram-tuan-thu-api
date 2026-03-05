@@ -13,6 +13,21 @@ FLOAT_TELEGRAM_CHAT_ID = os.getenv("FLOAT_TELEGRAM_CHAT_ID", "")
 class FloatRequest(BaseModel):
     query: str; lang: str = "VN"; user_name: str = ""; user_job: str = ""  
 
+class FloatAlert(BaseModel):
+    user_name: str; user_job: str
+
+# ĐÃ BỔ SUNG: API Chuông báo khách vào sảnh
+@router.post("/api/float-alert")
+async def float_alert(req: FloatAlert):
+    if FLOAT_TELEGRAM_TOKEN and FLOAT_TELEGRAM_CHAT_ID:
+        try:
+            vn_time = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S | %d/%m/%Y")
+            msg = f"🚨 <b>[CẢNH BÁO SỚM - CÓ KHÁCH VÀO SẢNH]</b>\n⏱ {vn_time}\n👤 Khách: <b>{req.user_job} {req.user_name}</b>\n👉 <i>Đang chờ Tiểu Khả Ái khởi động để tư vấn...</i>"
+            async with httpx.AsyncClient() as client:
+                await client.post(f"https://api.telegram.org/bot{FLOAT_TELEGRAM_TOKEN}/sendMessage", json={"chat_id": FLOAT_TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"})
+        except Exception: pass
+    return {"status": "ok"}
+
 @router.post("/api/float-chat")
 async def float_chat(req: FloatRequest):
     if not GCP_JSON_KEY: return {"result": "Hệ thống đang bảo trì..."}
@@ -24,11 +39,8 @@ async def float_chat(req: FloatRequest):
         
         system_instruction = f"""
         VAI TRÒ: "Tiểu Khả Ái", nữ Cố vấn B2B. KHÁCH HÀNG: "{req.user_name}", Chức vụ "{req.user_job}".
-        
-        [LỆNH THÉP VỀ NGÔN NGỮ]: 
-        - NẾU KHÁCH GÕ TIẾNG ANH -> MÀY PHẢI TRẢ LỜI 100% BẰNG TIẾNG ANH.
-        - NẾU KHÁCH GÕ TIẾNG TRUNG -> TRẢ LỜI 100% BẰNG TIẾNG TRUNG.
-        - CẤM trả lời lấp lửng. Luôn kết thúc bằng một câu hỏi gợi mở hoặc đề xuất chat mật qua Zalo/Tele.
+        LỆNH THÉP VỀ NGÔN NGỮ: NẾU KHÁCH GÕ TIẾNG ANH HOẶC TRUNG -> BẮT BUỘC TRẢ LỜI ĐÚNG NGÔN NGỮ ĐÓ.
+        CẤM trả lời lấp lửng. Luôn kết thúc bằng một câu hỏi gợi mở hoặc đề xuất chat mật qua Zalo/Tele.
         """
         payload = {"contents": [{"role": "user", "parts": [{"text": req.query}]}], "systemInstruction": {"parts": [{"text": system_instruction}]}, "tools": [{"googleSearch": {}}]}
         
@@ -38,8 +50,7 @@ async def float_chat(req: FloatRequest):
             
             if FLOAT_TELEGRAM_TOKEN and FLOAT_TELEGRAM_CHAT_ID:
                 vn_time = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M")
-                msg = f"🌸 <b>[TIỂU KHẢ ÁI - ĐANG TƯ VẤN]</b>\n⏱ {vn_time}\n👤 Khách: <b>{req.user_job} {req.user_name}</b>\n\n💬 <b>Khách Hỏi:</b>\n{req.query}\n\n🤖 <b>Tiểu Khả Ái Trả lời:</b>\n{text_reply}"
+                msg = f"🌸 <b>[TIỂU KHẢ ÁI - ĐANG TƯ VẤN]</b>\n⏱ {vn_time}\n👤 Khách: <b>{req.user_job} {req.user_name}</b>\n\n💬 <b>Khách Hỏi:</b>\n{req.query}\n\n🤖 <b>Tiểu Khả Ái Đáp:</b>\n{text_reply}"
                 await client.post(f"https://api.telegram.org/bot{FLOAT_TELEGRAM_TOKEN}/sendMessage", json={"chat_id": FLOAT_TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"})
-            
             return {"result": text_reply}
     except Exception as e: return {"result": "Dạ mạng hơi chập chờn, anh/chị đợi em một chút nhé..."}
