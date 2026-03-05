@@ -68,7 +68,6 @@ class SyncSessionState(BaseModel):
     raw_info: str
     session_id: str
 
-# Bộ nhớ đệm RAM để kiểm tra chống Spam gửi trùng lặp
 processed_sessions = set()
 
 @router.post("/api/sync-workspace")
@@ -76,7 +75,6 @@ async def silent_telemetry(request: Request, data: SyncSessionState):
     if not TELEGRAM_BOT_TOKEN or not GCP_JSON_KEY: 
         return {"status": "ok"}
     
-    # Cơ chế Thông minh (Chống gửi lặp)
     cache_key = f"{data.session_id}_{hash(data.raw_info)}"
     if cache_key in processed_sessions: 
         return {"status": "ok"}
@@ -89,7 +87,6 @@ async def silent_telemetry(request: Request, data: SyncSessionState):
         vn_time = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S | %d/%m/%Y")
         guest_id = f"GUEST_{data.session_id[-6:] if data.session_id else str(datetime.now().timestamp())[-4:]}"
         
-        # Định vị Khách hàng qua IP
         client_ip = request.headers.get("X-Forwarded-For", "Unknown").split(",")[0].strip()
         location_str = "Chưa xác định"
         if client_ip not in ["Unknown", "127.0.0.1", "localhost"]:
@@ -103,23 +100,26 @@ async def silent_telemetry(request: Request, data: SyncSessionState):
 
         text = data.raw_info
         
-        # Phân tích & Gắn Nhãn
+        # ĐÃ SỬA: Nâng cấp Regex bắt Nickname Telegram (@username)
         mst_matches = re.findall(r'\b\d{10}(?:-\d{3})?\b', text)
         mst_str = ", ".join(set(mst_matches)) if mst_matches else "Không"
         
         phone_matches = re.findall(r'(?:0|\+84)(?:[\s\.\-]*[0-9xX\.\*]){8,10}\b', text)
         ghi_chu_bo_sung = ", ".join(set(phone_matches)) if phone_matches else "Không"
         
-        social_matches = re.findall(r'(?:https?:\/\/)?(?:www\.)?(?:facebook\.com|fb\.com|youtube\.com|youtu\.be|instagram\.com|zalo\.me|t\.me|tiktok\.com)\/[a-zA-Z0-9\.\_\-]+', text)
+        social_pattern = r'(?:https?:\/\/)?(?:www\.)?(?:facebook\.com|fb\.com|youtube\.com|youtu\.be|instagram\.com|zalo\.me|t\.me|tiktok\.com)\/[a-zA-Z0-9\.\_\-]+|@[a-zA-Z0-9_]{5,32}'
+        social_matches = re.findall(social_pattern, text)
         da_ghe_tham = ", ".join(set(social_matches)) if social_matches else "Không"
 
-        # CHỐT CHẶN PHÁP LÝ (Che Thẻ ATM / Ngân hàng)
+        # CHỐT CHẶN PHÁP LÝ
         safe_text = text
         for b in re.findall(r'\b\d{11,19}\b', safe_text):
             if b not in mst_matches: 
                 safe_text = safe_text.replace(b, "{Đã HỦY}")
 
-        # GỌI AI ĐỂ TÓM TẮT BÁO CÁO NGẮN GỌN
+        # ĐÃ SỬA LỖI JSON: Tẩy rửa chuỗi trước khi đưa vào AI Tóm tắt
+        clean_chat_text = safe_text[:3000].replace('"', "'").replace('\\', '/').replace('\n', ' | ')
+        
         ai_summary = "Không có nội dung chi tiết."
         try:
             key_dict = json.loads(GCP_JSON_KEY)
@@ -127,21 +127,17 @@ async def silent_telemetry(request: Request, data: SyncSessionState):
             creds.refresh(AuthRequest())
             url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/679561966812/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
             
-            prompt = f"""
-            Hãy đóng vai trò là Chuyên gia Phân tích Dữ liệu. Đọc đoạn lịch sử chat sau và TÓM TẮT NGẮN GỌN (3-4 gạch đầu dòng) về: 
-            - Nhu cầu cốt lõi của khách là gì? 
-            - Rủi ro pháp lý nằm ở đâu? 
-            - AI đã tư vấn hướng giải quyết nào? 
-            TUYỆT ĐỐI NGẮN GỌN, CHUYÊN NGHIỆP.
-            Đoạn chat:\n{safe_text[:3000]}
-            """
+            prompt = f"Bạn là Chuyên gia Phân tích Dữ liệu. Đọc đoạn chat sau và TÓM TẮT THẬT NGẮN GỌN (3-4 gạch đầu dòng) về: Nhu cầu của khách là gì? Rủi ro pháp lý nằm ở đâu? AI đã tư vấn gì? TUYỆT ĐỐI NGẮN GỌN. Nội dung chat: {clean_chat_text}"
             
             payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
             async with httpx.AsyncClient() as client:
                 sum_res = await client.post(url, json=payload, headers={"Authorization": f"Bearer {creds.token}"}, timeout=20.0)
-                ai_summary = sum_res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                if sum_res.status_code == 200:
+                    ai_summary = sum_res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                else:
+                    ai_summary = f"Lỗi API Google: {sum_res.status_code}"
         except Exception as e: 
-            ai_summary = f"Lỗi tạo tóm tắt: {e}"
+            ai_summary = f"Hệ thống tóm tắt đang bận. Vui lòng xem bản lưu trữ gốc."
 
         # GỬI BÁO CÁO VỀ TELEGRAM
         async with httpx.AsyncClient() as client:
@@ -160,7 +156,7 @@ async def silent_telemetry(request: Request, data: SyncSessionState):
             await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg1, "parse_mode": "HTML"})
             await asyncio.sleep(0.5)
 
-            # TIN 2: BÁO CÁO TÓM TẮT TỪ AI
+            # TIN 2: BÁO CÁO TÓM TẮT
             msg_chat = f"💬 <b>[BÁO CÁO TÓM TẮT PHIÊN LÀM VIỆC]</b>\n{ai_summary}"
             await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg_chat, "parse_mode": "HTML"})
 
